@@ -35,6 +35,15 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
         }
     }
 
+    function mkFullDir(dir) {
+        var parts = dir.split('/'),
+            currDir = '';
+        parts.forEach(function (part) {
+            currDir += (currDir ? '/' : '') + part;
+            mkDir(currDir);
+        });
+    }
+
     /**
      * Copies one file from the copyList to outputDir. Only does
      * One at a time given the callback nature of sys.pump. If no more
@@ -75,7 +84,7 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
 
             stat = fs.statSync(inPath);
             if (stat.isDirectory()) {
-                mkDir(outDir);
+                mkDir(outPath);
                 findFiles(inPath + '/', outPath + '/');
             } else if (stat.isFile()) {
                 copyList.push([inPath, outPath]);
@@ -94,12 +103,10 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
      * Converts the contents of a file to an AMD module.
      * @param {String} contents the file contents.
      */
-    function convert(fileName) {
-debugger;
+    function convert(fileName, contents) {
         //Find dependencies.
-        var contents = fs.readFileSync(jqUiSrcDir + fileName, 'utf8'),
-            match = dependStartRegExp.exec(contents),
-            files = ["'jquery'", "'jquery-ui'"],
+        var match = dependStartRegExp.exec(contents),
+            files = ["'jquery'", "'jqueryui'"],
             fileParts = fileName.split('.'),
             tempDir = jqUiDir,
             moduleName, outFileName, i, segment;
@@ -107,18 +114,29 @@ debugger;
         //Strip off .js extension and convert jquery-ui to jqueryui,
         //generate module name.
         fileParts.pop();
-        if (fileParts[0] === 'jquery-ui') {
-            moduleName = fileParts[0] = 'jqueryui';
-            outFileName = jqUiDir + 'jqueryui.js';
+        if (fileParts[0].indexOf('jquery-ui') !== -1) {
+            moduleName = fileParts[0] = fileParts[0].replace(/jquery-ui/, 'jqueryui');
+            outFileName = jqUiDir + moduleName + '.js';
         } else {
             //convert preceding 'jquery' to 'jqueryui'
             fileParts[0] = 'jqueryui';
+            //remove .ui from path since it is implied already from
+            //top level 'jqueryui' name.
+            if (fileParts[1] === 'ui') {
+                fileParts.splice(1, 1);
+            }
             moduleName = fileParts.join('/');
             outFileName = jqUiDir + moduleName + '.js';
         }
 
+        //If fileParts' last piece is a datepicker i18n bundle, make datepicker
+        //an explicit dependency for it.
+        if (fileParts[fileParts.length - 1].indexOf('datepicker-') === 0) {
+            files.push("'jqueryui/datepicker'");
+        }
+
         //Make sure directories exist in the jqueryui section.
-        if (moduleName !== 'jqueryui') {
+        if (fileParts.length > 1) {
             for (i = 0; i < fileParts.length - 1 && (segment = fileParts[i]); i++) {
                 tempDir += segment + '/';
                 mkDir(tempDir);
@@ -127,7 +145,15 @@ debugger;
 
         if (match) {
             match[1].replace(filesRegExp, function (match, depName) {
-                files.push("'" + depName.replace(dotRegExp, '/') + "'");
+                files.push("'" + depName
+                                 .replace(/^jquery\./, 'jqueryui.')
+                                 //Remove .ui from the name if it is there,
+                                 //since it is already implied by the jqueryui
+                                 //name
+                                 .replace(/\.ui\./, '.')
+                                 //Convert to module name.
+                                 .replace(dotRegExp, '/') +
+                           "'");
             });
         }
 
@@ -157,7 +183,7 @@ debugger;
 
     console.log("Converting: " + inDir + " to: " + outDir);
 
-    mkDir(outDir);
+    mkFullDir(outDir);
 
     //Find all the files to transfer from input to output
     findFiles(inDir, outDir);
@@ -169,7 +195,7 @@ debugger;
             console.log('The directory does not appear to contain jQuery UI, not converting any files.');
             return;
         }
-debugger;
+
         //Make the base jqueryui folder.
         jqUiDir = jqUiSrcDir.split('/');
         jqUiDir.pop();
@@ -182,7 +208,17 @@ debugger;
             var srcPath = jqUiSrcDir + fileName;
             if (fs.statSync(srcPath).isFile() && jsFileRegExp.test(srcPath)) {
                 //console.log("Converting file: " + convertPath);
-                convert(fileName);
+                convert(fileName, fs.readFileSync(srcPath, 'utf8'));
+            }
+        });
+
+        //Transform the i18n files.
+        jqPaths = fs.readdirSync(jqUiSrcDir + 'i18n');
+        jqPaths.forEach(function (fileName) {
+            var srcPath = jqUiSrcDir + 'i18n/' + fileName;
+            if (fs.statSync(srcPath).isFile() && jsFileRegExp.test(srcPath)) {
+                //console.log("Converting file: " + convertPath);
+                convert(fileName, fs.readFileSync(srcPath, 'utf8'));
             }
         });
     });
