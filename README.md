@@ -37,9 +37,9 @@ Once the conversion script runs, it will create a few new files and directories.
 The conversion process transformed the following files:
 
 * jqueryui-1.8.7/ui/jquery-ui.js --> jqueryui-1.8.7/jqueryui.js
-* jqueryui-1.8.7/ui/jquery.ui.*.js --> jqueryui-1.8.7/jqueryui/*.js
-* jqueryui-1.8.7/ui/jquery.effects.*.js --> jqueryui-1.8.7/jqueryui/effects/*.js
-* jqueryui-1.8.7/ui/i18n/jquery.ui.datepicker-*.js --> jqueryui-1.8.7/jqueryui/datepicker-*.js
+* jqueryui-1.8.7/ui/jquery.ui.?.js --> jqueryui-1.8.7/jqueryui/?.js
+* jqueryui-1.8.7/ui/jquery.effects.?.js --> jqueryui-1.8.7/jqueryui/effects/?.js
+* jqueryui-1.8.7/ui/i18n/jquery.ui.datepicker-?.js --> jqueryui-1.8.7/jqueryui/datepicker-?.js
 * jqueryui-1.8.7/ui/i18n/jquery-ui-i18n.js --> jqueryui-1.8.7/jqueryui-i18n.js
 
 These file/path name changes were done to fit better with module path expectations, and to make it easier/less typing to load the files.
@@ -50,8 +50,8 @@ The **example** directory contains an example that includes a sample web project
 
 ## Downloads
 
-* [A zip file of theconverted 1.8.7 release](http://requirejs.org/jquery-amd/jquery-amd-1.8.7.zip).
-* [A zip file of this complete directory, including conversion script and example project](http://requirejs.org/jquery-amd/jquery-amd.zip).
+* [A zip file of the converted 1.8.7 release](http://requirejs.org/jqueryui-amd/jqueryui-amd-1.8.7.zip).
+* [A zip file of this complete directory, including conversion script and example project](http://requirejs.org/jqueryui-amd/jqueryui-amd.zip).
 
 
 ## Constraints
