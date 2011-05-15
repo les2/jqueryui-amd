@@ -1,22 +1,31 @@
 # jqueryui-amd
 
-A conversion script for translating jQuery UI files into the style used by the [AMD API proposal](http://wiki.commonjs.org/wiki/Modules/AsynchronousDefinition). This API is usable in script loaders like [RequireJS](http://requirejs.org).
+A conversion script for translating jQuery UI files into the style used by the
+[AMD API proposal](http://wiki.commonjs.org/wiki/Modules/AsynchronousDefinition).
+This API is usable in script loaders like [RequireJS](http://requirejs.org).
 
 ## How to Run It
 
-The script requires Node 0.2.x (not tested on 0.3.x). Run the following command to generate the modules:
+The script requires Node 0.4+. Run the following command to generate the modules:
 
-    node r.js convert.js path/to/jqueryui/source ./outputdir
+    node example/r.js convert.js path/to/jqueryui/source ./outputdir
 
 ## What happens
 
-It is assumed a full source directory of jQuery UI is given to the conversion script. So, the directory should have a **ui** directory inside of it with the .js files for jQuery UI.
+It is assumed a full source directory of jQuery UI is given to the conversion
+script. So, the directory should have a **ui** directory inside of it with the
+.js files for jQuery UI.
 
-The example's jQueryUI directory was created with the following command (run from this directory):
+The example's jQueryUI directory was created with the following command (run
+from this directory):
 
-    node r.js convert.js path/to/jquery-ui-1.8.7 ./example/webapp/scripts/jqueryui-1.8.7
+    node example/r.js convert.js path/to/jquery-ui-1.8.7 ./example/webapp/scripts/jqueryui-1.8.7
 
-Once the conversion script runs, it will create a few new files and directories. Taking the example above, the **example/webapp/scripts/jqueryui-1.8.7** directory above would have the following contents (items that can be deleted if you do not use them -- they are not strictly part of making the example work -- are marked with a (d) below):
+Once the conversion script runs, it will create a few new files and directories.
+Taking the example above, the **example/webapp/scripts/jqueryui-1.8.7**
+directory above would have the following contents (items that can be deleted if
+you do not use them -- they are not strictly part of making the example
+work -- are marked with a (d) below):
 
 * jqueryui-1.8.7
     * AUTHORS.txt
@@ -42,11 +51,14 @@ The conversion process transformed the following files:
 * jqueryui-1.8.7/ui/i18n/jquery.ui.datepicker-?.js --> jqueryui-1.8.7/jqueryui/datepicker-?.js
 * jqueryui-1.8.7/ui/i18n/jquery-ui-i18n.js --> jqueryui-1.8.7/jqueryui-i18n.js
 
-These file/path name changes were done to fit better with module path expectations, and to make it easier/less typing to load the files.
+These file/path name changes were done to fit better with module path expectations,
+and to make it easier/less typing to load the files.
 
 ## Example
 
-The **example** directory contains an example that includes a sample web project, in the **webapp** directory, along with the RequireJS optimizer, in the **requirejs** directory. Run the webapp/app.html file to see the example in action.
+The **example** directory contains an example that includes a sample web
+project, in the **webapp** directory, along with the RequireJS optimizer, r.js.
+Run the webapp/app.html file to see the example in action.
 
 ## Downloads
 
@@ -56,7 +68,8 @@ The **example** directory contains an example that includes a sample web project
 
 ## Constraints
 
-This script assumes a directory for jQuery UI contains a directory inside of it that has a jquery-ui.js file.
+This script assumes a directory for jQuery UI contains a directory inside of
+it that has a jquery-ui.js file.
 
 This script will need to be revisited if:
 

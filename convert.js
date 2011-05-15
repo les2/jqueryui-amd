@@ -7,9 +7,9 @@
 /**
  * This file converts jQuery UI files to use define() syntax.
  *
- * It should be run in node (only 0.2.x tested), using the r.js RequireJS
+ * It should be run in node (only 0.4 tested), using the r.js RequireJS
  * adapter for Node, available at:
- * http://requirejs.org/docs/download.html#node
+ * https://github.com/jrburke/r.js
  */
 
 'use strict';
