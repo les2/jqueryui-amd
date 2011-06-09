@@ -9,7 +9,7 @@
 
     paths: {
         "jquery": "require-jquery",
-        "jqueryui": "jqueryui-1.8.7/jqueryui"
+        "jqueryui": "jqueryui-1.8.13/jqueryui"
     },
 
     modules: [

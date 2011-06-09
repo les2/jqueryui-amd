@@ -13,25 +13,26 @@
  */
 
 'use strict';
-/*jslint regexp: false, plusplus: false */
+/*jslint regexp: false, plusplus: false, strict: false */
 /*global require: false, process: false, console: false */
 
 require(['fs', 'path', 'sys'], function (fs, path, sys) {
+
     var inDir = process.argv[3],
         outDir = process.argv[4],
         useNames = true, //process.argv[5] === 'named',
-        jqUiFileRegExp = /jquery-ui\.js$/,
         jsFileRegExp = /\.js$/,
         dependStartRegExp =  /\*\s+Depends\:([^\/]+)\*\//,
         dotRegExp = /\./g,
         filesRegExp = /([\w\.]+)\.js/g,
-        jqUiSrcDir, jqUiDir, jqPaths,
+        jqUiSrcDir, jqPaths,
         copyList = [],
         copyIndex = 0;
 
     function mkDir(dir) {
         if (!path.existsSync(dir)) {
-            fs.mkdirSync(dir, 0777);
+            //511 is decimal for 0777 octal
+            fs.mkdirSync(dir, 511);
         }
     }
 
@@ -76,7 +77,7 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
      */
     function findFiles(inDir, outDir) {
         var paths = fs.readdirSync(inDir),
-            outPath, stat, input, output;
+            outPath, stat;
 
         paths.forEach(function (inPath) {
             outPath = outDir + inPath;
@@ -88,13 +89,6 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
                 findFiles(inPath + '/', outPath + '/');
             } else if (stat.isFile()) {
                 copyList.push([inPath, outPath]);
-
-                if (jqUiFileRegExp.test(outPath)) {
-                    jqUiSrcDir = outPath.split('/');
-                    //Pop off the file name.
-                    jqUiSrcDir.pop();
-                    jqUiSrcDir = jqUiSrcDir.join('/') + '/';
-                }
             }
         });
     }
@@ -106,17 +100,17 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
     function convert(fileName, contents) {
         //Find dependencies.
         var match = dependStartRegExp.exec(contents),
-            files = ["'jquery'", "'jqueryui'"],
+            files = ["'jquery'"],
             fileParts = fileName.split('.'),
-            tempDir = jqUiDir,
+            tempDir = outDir,
             moduleName, outFileName, i, segment;
 
         //Strip off .js extension and convert jquery-ui to jqueryui,
         //generate module name.
         fileParts.pop();
         if (fileParts[0].indexOf('jquery-ui') !== -1) {
-            moduleName = fileParts[0] = fileParts[0].replace(/jquery-ui/, 'jqueryui');
-            outFileName = jqUiDir + moduleName + '.js';
+            moduleName = 'jqueryui';
+            outFileName = outDir + moduleName + '.js';
         } else {
             //convert preceding 'jquery' to 'jqueryui'
             fileParts[0] = 'jqueryui';
@@ -126,7 +120,7 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
                 fileParts.splice(1, 1);
             }
             moduleName = fileParts.join('/');
-            outFileName = jqUiDir + moduleName + '.js';
+            outFileName = outDir + moduleName + '.js';
         }
 
         //If fileParts' last piece is a datepicker i18n bundle, make datepicker
@@ -136,7 +130,7 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
         }
 
         //Make sure directories exist in the jqueryui section.
-        if (fileParts.length > 1) {
+        if (moduleName !== 'jqueryui' && fileParts.length > 1) {
             for (i = 0; i < fileParts.length - 1 && (segment = fileParts[i]); i++) {
                 tempDir += segment + '/';
                 mkDir(tempDir);
@@ -181,6 +175,17 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
         outDir += '/';
     }
 
+    //Make sure there is a ui directory in there, otherwise cannot
+    //convert correctly.
+    jqUiSrcDir = path.join(inDir, 'ui/');
+
+    if (!path.existsSync(jqUiSrcDir) || !fs.statSync(jqUiSrcDir).isDirectory()) {
+        console.log('The directory does not appear to contain jQuery UI, ' +
+                    'not converting any files. Looking for "ui" directory ' +
+                    'in the source directory failed.');
+        return;
+    }
+
     console.log("Converting: " + inDir + " to: " + outDir);
 
     mkFullDir(outDir);
@@ -190,18 +195,6 @@ require(['fs', 'path', 'sys'], function (fs, path, sys) {
 
     //Now trigger the actual copy.
     copy(function () {
-        //If did not find base jQuery UI file, error out.
-        if (!jqUiSrcDir) {
-            console.log('The directory does not appear to contain jQuery UI, not converting any files.');
-            return;
-        }
-
-        //Make the base jqueryui folder.
-        jqUiDir = jqUiSrcDir.split('/');
-        jqUiDir.pop();
-        jqUiDir.pop();
-        jqUiDir = jqUiDir.join('/') + '/';
-
         //For each file that is a sibling to jquery-ui, transform to define.
         jqPaths = fs.readdirSync(jqUiSrcDir);
         jqPaths.forEach(function (fileName) {
