@@ -1,5 +1,5 @@
 /** vim: et:ts=4:sw=4:sts=4
- * @license RequireJS 0.24.0+ Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS 0.25.0 Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -8,10 +8,10 @@
   jQuery: false, clearInterval: false, setInterval: false, self: false,
   setTimeout: false, opera: false */
 
-var require, define;
+var requirejs, require, define;
 (function () {
     //Change this version number for each release.
-    var version = "0.24.0+",
+    var version = "0.25.0",
         commentRegExp = /(\/\*([\s\S]*?)\*\/|\/\/(.*)$)/mg,
         cjsRequireRegExp = /require\(["']([^'"\s]+)["']\)/g,
         currDirRegExp = /^\.\//,
@@ -71,10 +71,16 @@ var require, define;
      * Constructs an error with a pointer to an URL with more information.
      * @param {String} id the error ID that maps to an ID on a web page.
      * @param {String} message human readable error.
+     * @param {Error} [err] the original error, if there is one.
+     *
      * @returns {Error}
      */
-    function makeError(id, msg) {
-        return new Error(msg + '\nhttp://requirejs.org/docs/errors.html#' + id);
+    function makeError(id, msg, err) {
+        var e = new Error(msg + '\nhttp://requirejs.org/docs/errors.html#' + id);
+        if (err) {
+            e.originalError = err;
+        }
+        return e;
     }
 
     /**
@@ -129,16 +135,27 @@ var require, define;
         }
     }
 
-    //Check for an existing version of require. If so, then exit out. Only allow
-    //one version of require to be active in a page. However, allow for a require
-    //config object, just exit quickly if require is an actual function.
-    if (typeof require !== "undefined") {
-        if (isFunction(require)) {
+    if (typeof define !== "undefined") {
+        //If a define is already in play via another AMD loader,
+        //do not overwrite.
+        return;
+    }
+
+    if (typeof requirejs !== "undefined") {
+        if (isFunction(requirejs)) {
+            //Do not overwrite and existing requirejs instance.
             return;
         } else {
-            //assume it is a config object.
-            cfg = require;
+            cfg = requirejs;
+            requirejs = undefined;
         }
+    }
+
+    //Allow for a require config object
+    if (typeof require !== "undefined" && !isFunction(require)) {
+        //assume it is a config object.
+        cfg = require;
+        require = undefined;
     }
 
     /**
@@ -393,7 +410,8 @@ var require, define;
             mixin(modRequire, {
                 nameToUrl: makeContextModuleFunc(context.nameToUrl, relModuleMap),
                 toUrl: makeContextModuleFunc(context.toUrl, relModuleMap),
-                isDefined: makeContextModuleFunc(context.isDefined, relModuleMap),
+                defined: makeContextModuleFunc(context.requireDefined, relModuleMap),
+                specified: makeContextModuleFunc(context.requireSpecified, relModuleMap),
                 ready: req.ready,
                 isBrowser: req.isBrowser
             });
@@ -508,7 +526,7 @@ var require, define;
         }
 
         function execManager(manager) {
-            var i, ret, waitingCallbacks,
+            var i, ret, waitingCallbacks, err,
                 cb = manager.callback,
                 fullName = manager.fullName,
                 args = [],
@@ -524,24 +542,20 @@ var require, define;
                     }
                 }
 
-                ret = req.execCb(fullName, manager.callback, args, defined[fullName]);
+                try {
+                    ret = req.execCb(fullName, manager.callback, args, defined[fullName]);
+                } catch (e) {
+                    err = e;
+                }
 
                 if (fullName) {
-                    //If exports is in play, favor that since it helps circular
-                    //dependencies. If setting exports via "module" is in play,
-                    //favor that but only if the value is different from default
-                    //exports value.
-                    if (manager.usingExports && manager.cjsModule &&
-                        manager.cjsModule.exports !== defined[fullName]) {
+                    //If setting exports via "module" is in play,
+                    //favor that over return value and exports. After that,
+                    //favor a non-undefined return value over exports use.
+                    if (manager.cjsModule && manager.cjsModule.exports !== undefined) {
                         ret = defined[fullName] = manager.cjsModule.exports;
-                    } else if (fullName in defined) {
-                        //This case is when usingExports is in play and
-                        //module.exports/setExports was not used. It could also
-                        //occur if the module was previously defined, but that
-                        //should not happen, checks for specified and defined
-                        //elsewhere should prevent that from happening. However,
-                        //if it does for some reason, only the original definition
-                        //will be used for integrity.
+                    } else if (ret === undefined && manager.usingExports) {
+                        //exports already set the defined value.
                         ret = defined[fullName];
                     } else {
                         //Use the return value from the function.
@@ -554,6 +568,31 @@ var require, define;
                 ret = defined[fullName] = cb;
             }
 
+            //Clean up waiting. Do this before error calls, and before
+            //calling back waitingCallbacks, so that bookkeeping is correct
+            //in the event of an error and error is reported in correct order,
+            //since the waitingCallbacks will likely have errors if the
+            //onError function does not throw.
+            if (waiting[manager.waitId]) {
+                delete waiting[manager.waitId];
+                manager.isDone = true;
+                context.waitCount -= 1;
+                if (context.waitCount === 0) {
+                    //Clear the wait array used for cycles.
+                    waitAry = [];
+                }
+            }
+
+            if (err) {
+                err = makeError('defineerror', 'Error evaluating ' +
+                                'module "' + fullName + '" at location "' +
+                                (fullName ? makeModuleMap(fullName).url : '') + '":\n' +
+                                err + '\nfileName:' + (err.fileName || err.sourceURL) +
+                                '\nlineNumber: ' + (err.lineNumber || err.line), err);
+                err.moduleName = fullName;
+                return req.onError(err);
+            }
+
             if (fullName) {
                 //If anything was waiting for this module to be defined,
                 //notify them now.
@@ -563,17 +602,6 @@ var require, define;
                         waitingCallbacks[i].onDep(fullName, ret);
                     }
                     delete managerCallbacks[fullName];
-                }
-            }
-
-            //Clean up waiting.
-            if (waiting[manager.waitId]) {
-                delete waiting[manager.waitId];
-                manager.isDone = true;
-                context.waitCount -= 1;
-                if (context.waitCount === 0) {
-                    //Clear the wait array used for cycles.
-                    waitAry = [];
                 }
             }
 
@@ -695,14 +723,14 @@ var require, define;
         }
 
         /**
-         * Convenience method to call main for a require.def call that was put on
+         * Convenience method to call main for a define call that was put on
          * hold in the defQueue.
          */
         function callDefMain(args) {
             main.apply(null, args);
             //Mark the module loaded. Must do it here in addition
-            //to doing it in require.def in case a script does
-            //not call require.def
+            //to doing it in define in case a script does
+            //not call define
             loaded[args[0]] = true;
         }
 
@@ -789,7 +817,7 @@ var require, define;
                 //It is possible to disable the wait interval by using waitSeconds of 0.
                 expired = waitInterval && (context.startTime + waitInterval) < new Date().getTime(),
                 noLoads = "", hasLoadedProp = false, stillLoading = false, prop,
-                err, manager, ary, i, j, dep, args = [];
+                err, manager;
 
             //If there are items still in the paused queue processing wait.
             //This is particularly important in the sync case where each paused
@@ -864,27 +892,17 @@ var require, define;
                     forceExec(manager, {});
                 }
 
-                //Only allow this recursion to a certain depth.
-                if (checkLoadedDepth < 10) {
+                //Only allow this recursion to a certain depth. Only
+                //triggered by errors in calling a module in which its
+                //modules waiting on it cannot finish loading, or some circular
+                //dependencies that then may add more dependencies.
+                //The value of 5 is a bit arbitrary. Hopefully just one extra
+                //pass, or two for the case of circular dependencies generating
+                //more work that gets resolved in the sync node case.
+                if (checkLoadedDepth < 5) {
                     checkLoadedDepth += 1;
                     checkLoaded();
-                } else {
-                    for (i = 0; (manager = waitAry[i]); i++) {
-                        if (!manager.isDone) {
-                            err += '\n* ' + manager.fullName + ' waiting for: ';
-                            ary = manager.depArray;
-                            for (j = 0; j < ary.length; j++) {
-                                dep = ary[i];
-                                if (!(dep in manager.deps)) {
-                                    args.push(dep);
-                                }
-                            }
-                            err += args.join(',');
-                        }
-                    }
-                    req.onError(makeError('waitdep', 'Unresolved dependency:' + err));
                 }
-                return undefined;
             }
 
             checkLoadedDepth = 0;
@@ -916,8 +934,8 @@ var require, define;
 
             load = function (ret) {
                 //Allow the build process to register plugin-loaded dependencies.
-                if (require.onPluginLoad) {
-                    require.onPluginLoad(context, pluginName, name, ret);
+                if (req.onPluginLoad) {
+                    req.onPluginLoad(context, pluginName, name, ret);
                 }
 
                 execManager({
@@ -946,7 +964,9 @@ var require, define;
                 if (hasInteractive) {
                     useInteractive = false;
                 }
-                eval(text);
+
+                req.exec(text);
+
                 if (hasInteractive) {
                     useInteractive = true;
                 }
@@ -1193,8 +1213,12 @@ var require, define;
                 }
             },
 
-            isDefined: function (moduleName, relModuleMap) {
+            requireDefined: function (moduleName, relModuleMap) {
                 return makeModuleMap(moduleName, relModuleMap).fullName in defined;
+            },
+
+            requireSpecified: function (moduleName, relModuleMap) {
+                return makeModuleMap(moduleName, relModuleMap).fullName in specified;
             },
 
             require: function (deps, callback, relModuleMap) {
@@ -1276,11 +1300,11 @@ var require, define;
                         args[0] = moduleName;
                         break;
                     } else if (args[0] === moduleName) {
-                        //Found matching require.def call for this script!
+                        //Found matching define call for this script!
                         break;
                     } else {
-                        //Some other named require.def call, most likely the result
-                        //of a build layer that included many require.def calls.
+                        //Some other named define call, most likely the result
+                        //of a build layer that included many define calls.
                         callDefMain(args);
                         args = null;
                     }
@@ -1298,7 +1322,7 @@ var require, define;
                 }
 
                 //Mark the script as loaded. Note that this can be different from a
-                //moduleName that maps to a require.def call. This line is important
+                //moduleName that maps to a define call. This line is important
                 //for traditional browser scripts.
                 loaded[moduleName] = true;
 
@@ -1418,7 +1442,7 @@ var require, define;
      * on a require that are not standardized), and to give a short
      * name for minification/local scope use.
      */
-    req = require = function (deps, callback) {
+    req = requirejs = function (deps, callback) {
 
         //Find the right context, use default
         var contextName = defContextName,
@@ -1450,6 +1474,13 @@ var require, define;
 
         return context.require(deps, callback);
     };
+
+    /**
+     * Export require as a global, but only if it does not already exist.
+     */
+    if (typeof require === "undefined") {
+        require = req;
+    }
 
     /**
      * Global require.toUrl(), to match global require, mostly useful
@@ -1504,8 +1535,8 @@ var require, define;
      * @param {Object} url the URL to the module.
      */
     req.load = function (context, moduleName, url) {
-        var contextName = context.contextName,
-            loaded = context.loaded;
+        var loaded = context.loaded;
+
         isDone = false;
 
         //Only set loaded to false for tracking if it has not already been set.
@@ -1514,7 +1545,7 @@ var require, define;
         }
 
         context.scriptCount += 1;
-        req.attach(url, contextName, moduleName);
+        req.attach(url, context, moduleName);
 
         //If tracking a jQuery, then make sure its ready callbacks
         //are put on hold to prevent its ready callbacks from
@@ -1619,6 +1650,15 @@ var require, define;
     };
 
     /**
+     * Executes the text. Normally just uses eval, but can be modified
+     * to use a more environment specific call.
+     * @param {String} text the text to execute/evaluate.
+     */
+    req.exec = function (text) {
+        return eval(text);
+    };
+
+    /**
      * Executes a module callack function. Broken out as a separate function
      * solely to allow the build system to sequence the files in the built
      * layer in the right sequence.
@@ -1674,17 +1714,19 @@ var require, define;
      * environment. Right now only supports browser loading,
      * but can be redefined in other environments to do the right thing.
      * @param {String} url the url of the script to attach.
-     * @param {String} contextName the name of the context that wants the script.
+     * @param {Object} context the context that wants the script.
      * @param {moduleName} the name of the module that is associated with the script.
      * @param {Function} [callback] optional callback, defaults to require.onScriptLoad
      * @param {String} [type] optional type, defaults to text/javascript
      */
-    req.attach = function (url, contextName, moduleName, callback, type) {
-        var node, loaded, context;
+    req.attach = function (url, context, moduleName, callback, type) {
+        var node, loaded;
         if (isBrowser) {
             //In the browser so use a script tag
             callback = callback || req.onScriptLoad;
-            node = document.createElement("script");
+            node = context && context.config && context.config.xhtml ?
+                    document.createElementNS("http://www.w3.org/1999/xhtml", "html:script") :
+                    document.createElement("script");
             node.type = type || "text/javascript";
             node.charset = "utf-8";
             //Use async so Gecko does not block on executing the script if something
@@ -1699,7 +1741,9 @@ var require, define;
             //plugin
             node.async = !s.skipAsync[url];
 
-            node.setAttribute("data-requirecontext", contextName);
+            if (context) {
+                node.setAttribute("data-requirecontext", context.contextName);
+            }
             node.setAttribute("data-requiremodule", moduleName);
 
             //Set up load listener. Test attachEvent first because IE9 has
@@ -1713,9 +1757,9 @@ var require, define;
             if (node.attachEvent && !isOpera) {
                 //Probably IE. IE (at least 6-8) do not fire
                 //script onload right after executing the script, so
-                //we cannot tie the anonymous require.def call to a name.
+                //we cannot tie the anonymous define call to a name.
                 //However, IE reports the script as being in "interactive"
-                //readyState at the time of the require.def call.
+                //readyState at the time of the define call.
                 useInteractive = true;
                 node.attachEvent("onreadystatechange", callback);
             } else {
@@ -1724,7 +1768,7 @@ var require, define;
             node.src = url;
 
             //For some cache cases in IE 6-8, the script executes before the end
-            //of the appendChild execution, so to tie an anonymous require.def
+            //of the appendChild execution, so to tie an anonymous define
             //call to the module name (which is stored on the node), hold on
             //to a reference to this node, but clear after the DOM insertion.
             currentlyAddingScript = node;
@@ -1742,7 +1786,6 @@ var require, define;
             //are in play, the expectation that a build has been done so that
             //only one script needs to be loaded anyway. This may need to be
             //reevaluated if other use cases become common.
-            context = contexts[contextName];
             loaded = context.loaded;
             loaded[moduleName] = false;
 
@@ -1954,7 +1997,7 @@ var require, define;
     }
 }());
 /*!
- * jQuery JavaScript Library v1.6.1
+ * jQuery JavaScript Library v1.6.2
  * http://jquery.com/
  *
  * Copyright 2011, John Resig
@@ -1966,7 +2009,7 @@ var require, define;
  * Copyright 2011, The Dojo Foundation
  * Released under the MIT, BSD, and GPL Licenses.
  *
- * Date: Thu May 12 15:04:36 2011 -0400
+ * Date: Thu Jun 30 14:16:56 2011 -0400
  */
 (function( window, undefined ) {
 
@@ -2019,6 +2062,14 @@ var jQuery = function( selector, context ) {
 	ropera = /(opera)(?:.*version)?[ \/]([\w.]+)/,
 	rmsie = /(msie) ([\w.]+)/,
 	rmozilla = /(mozilla)(?:.*? rv:([\w.]+))?/,
+
+	// Matches dashed string for camelizing
+	rdashAlpha = /-([a-z])/ig,
+
+	// Used by jQuery.camelCase as callback to replace()
+	fcamelCase = function( all, letter ) {
+		return letter.toUpperCase();
+	},
 
 	// Keep a UserAgent string for use with jQuery.browser
 	userAgent = navigator.userAgent,
@@ -2159,7 +2210,7 @@ jQuery.fn = jQuery.prototype = {
 	selector: "",
 
 	// The current version of jQuery being used
-	jquery: "1.6.1",
+	jquery: "1.6.2",
 
 	// The default length of a jQuery object is 0
 	length: 0,
@@ -2558,6 +2609,12 @@ jQuery.extend({
 		}
 	},
 
+	// Converts a dashed string to camelCased string;
+	// Used by both the css and data modules
+	camelCase: function( string ) {
+		return string.replace( rdashAlpha, fcamelCase );
+	},
+
 	nodeName: function( elem, name ) {
 		return elem.nodeName && elem.nodeName.toUpperCase() === name.toUpperCase();
 	},
@@ -2754,7 +2811,7 @@ jQuery.extend({
 	},
 
 	// Mutifunctional method to get and set values to a collection
-	// The value/s can be optionally by executed if its a function
+	// The value/s can optionally be executed if it's a function
 	access: function( elems, key, value, exec, fn, pass ) {
 		var length = elems.length;
 
@@ -2885,7 +2942,6 @@ function doScrollCheck() {
 	jQuery.ready();
 }
 
-// Expose jQuery to the global object
 return jQuery;
 
 })();
@@ -3102,7 +3158,9 @@ jQuery.support = (function() {
 		support,
 		fragment,
 		body,
-		bodyStyle,
+		testElementParent,
+		testElement,
+		testElementStyle,
 		tds,
 		events,
 		eventName,
@@ -3196,11 +3254,10 @@ jQuery.support = (function() {
 	}
 
 	if ( !div.addEventListener && div.attachEvent && div.fireEvent ) {
-		div.attachEvent( "onclick", function click() {
+		div.attachEvent( "onclick", function() {
 			// Cloning a node shouldn't copy over any
 			// bound event handlers (IE does this)
 			support.noCloneEvent = false;
-			div.detachEvent( "onclick", click );
 		});
 		div.cloneNode( true ).fireEvent( "onclick" );
 	}
@@ -3225,22 +3282,30 @@ jQuery.support = (function() {
 	// Figure out if the W3C box model works as expected
 	div.style.width = div.style.paddingLeft = "1px";
 
-	// We use our own, invisible, body
-	body = document.createElement( "body" );
-	bodyStyle = {
+	body = document.getElementsByTagName( "body" )[ 0 ];
+	// We use our own, invisible, body unless the body is already present
+	// in which case we use a div (#9239)
+	testElement = document.createElement( body ? "div" : "body" );
+	testElementStyle = {
 		visibility: "hidden",
 		width: 0,
 		height: 0,
 		border: 0,
-		margin: 0,
-		// Set background to avoid IE crashes when removing (#9028)
-		background: "none"
+		margin: 0
 	};
-	for ( i in bodyStyle ) {
-		body.style[ i ] = bodyStyle[ i ];
+	if ( body ) {
+		jQuery.extend( testElementStyle, {
+			position: "absolute",
+			left: -1000,
+			top: -1000
+		});
 	}
-	body.appendChild( div );
-	documentElement.insertBefore( body, documentElement.firstChild );
+	for ( i in testElementStyle ) {
+		testElement.style[ i ] = testElementStyle[ i ];
+	}
+	testElement.appendChild( div );
+	testElementParent = body || documentElement;
+	testElementParent.insertBefore( testElement, testElementParent.firstChild );
 
 	// Check if a disconnected checkbox will retain its checked
 	// value of true after appended to the DOM (IE6/7)
@@ -3299,8 +3364,8 @@ jQuery.support = (function() {
 	}
 
 	// Remove the body element we added
-	body.innerHTML = "";
-	documentElement.removeChild( body );
+	testElement.innerHTML = "";
+	testElementParent.removeChild( testElement );
 
 	// Technique from Juriy Zaytsev
 	// http://thinkweb2.com/projects/prototype/detecting-event-support-without-browser-sniffing/
@@ -3323,6 +3388,9 @@ jQuery.support = (function() {
 			support[ i + "Bubbles" ] = isSupported;
 		}
 	}
+
+	// Null connected elements to avoid leaks in IE
+	testElement = fragment = select = opt = body = marginDiv = div = input = null;
 
 	return support;
 })();
@@ -3441,7 +3509,10 @@ jQuery.extend({
 			return thisCache[ internalKey ] && thisCache[ internalKey ].events;
 		}
 
-		return getByName ? thisCache[ jQuery.camelCase( name ) ] : thisCache;
+		return getByName ? 
+			// Check for both converted-to-camel and non-converted data property names
+			thisCache[ jQuery.camelCase( name ) ] || thisCache[ name ] :
+			thisCache;
 	},
 
 	removeData: function( elem, name, pvt /* Internal Use Only */ ) {
@@ -3837,7 +3908,7 @@ var rclass = /[\n\t\r]/g,
 	rfocusable = /^(?:button|input|object|select|textarea)$/i,
 	rclickable = /^a(?:rea)?$/i,
 	rboolean = /^(?:autofocus|autoplay|async|checked|controls|defer|disabled|hidden|loop|multiple|open|readonly|required|scoped|selected)$/i,
-	rinvalidChar = /\:/,
+	rinvalidChar = /\:|^on/,
 	formHook, boolHook;
 
 jQuery.fn.extend({
@@ -3867,30 +3938,31 @@ jQuery.fn.extend({
 	},
 
 	addClass: function( value ) {
+		var classNames, i, l, elem,
+			setClass, c, cl;
+
 		if ( jQuery.isFunction( value ) ) {
-			return this.each(function(i) {
-				var self = jQuery(this);
-				self.addClass( value.call(this, i, self.attr("class") || "") );
+			return this.each(function( j ) {
+				jQuery( this ).addClass( value.call(this, j, this.className) );
 			});
 		}
 
 		if ( value && typeof value === "string" ) {
-			var classNames = (value || "").split( rspace );
+			classNames = value.split( rspace );
 
-			for ( var i = 0, l = this.length; i < l; i++ ) {
-				var elem = this[i];
+			for ( i = 0, l = this.length; i < l; i++ ) {
+				elem = this[ i ];
 
 				if ( elem.nodeType === 1 ) {
-					if ( !elem.className ) {
+					if ( !elem.className && classNames.length === 1 ) {
 						elem.className = value;
 
 					} else {
-						var className = " " + elem.className + " ",
-							setClass = elem.className;
+						setClass = " " + elem.className + " ";
 
-						for ( var c = 0, cl = classNames.length; c < cl; c++ ) {
-							if ( className.indexOf( " " + classNames[c] + " " ) < 0 ) {
-								setClass += " " + classNames[c];
+						for ( c = 0, cl = classNames.length; c < cl; c++ ) {
+							if ( !~setClass.indexOf( " " + classNames[ c ] + " " ) ) {
+								setClass += classNames[ c ] + " ";
 							}
 						}
 						elem.className = jQuery.trim( setClass );
@@ -3903,24 +3975,25 @@ jQuery.fn.extend({
 	},
 
 	removeClass: function( value ) {
-		if ( jQuery.isFunction(value) ) {
-			return this.each(function(i) {
-				var self = jQuery(this);
-				self.removeClass( value.call(this, i, self.attr("class")) );
+		var classNames, i, l, elem, className, c, cl;
+
+		if ( jQuery.isFunction( value ) ) {
+			return this.each(function( j ) {
+				jQuery( this ).removeClass( value.call(this, j, this.className) );
 			});
 		}
 
 		if ( (value && typeof value === "string") || value === undefined ) {
-			var classNames = (value || "").split( rspace );
+			classNames = (value || "").split( rspace );
 
-			for ( var i = 0, l = this.length; i < l; i++ ) {
-				var elem = this[i];
+			for ( i = 0, l = this.length; i < l; i++ ) {
+				elem = this[ i ];
 
 				if ( elem.nodeType === 1 && elem.className ) {
 					if ( value ) {
-						var className = (" " + elem.className + " ").replace(rclass, " ");
-						for ( var c = 0, cl = classNames.length; c < cl; c++ ) {
-							className = className.replace(" " + classNames[c] + " ", " ");
+						className = (" " + elem.className + " ").replace( rclass, " " );
+						for ( c = 0, cl = classNames.length; c < cl; c++ ) {
+							className = className.replace(" " + classNames[ c ] + " ", " ");
 						}
 						elem.className = jQuery.trim( className );
 
@@ -3939,9 +4012,8 @@ jQuery.fn.extend({
 			isBool = typeof stateVal === "boolean";
 
 		if ( jQuery.isFunction( value ) ) {
-			return this.each(function(i) {
-				var self = jQuery(this);
-				self.toggleClass( value.call(this, i, self.attr("class"), stateVal), stateVal );
+			return this.each(function( i ) {
+				jQuery( this ).toggleClass( value.call(this, i, this.className, stateVal), stateVal );
 			});
 		}
 
@@ -3995,7 +4067,13 @@ jQuery.fn.extend({
 					return ret;
 				}
 
-				return (elem.value || "").replace(rreturn, "");
+				ret = elem.value;
+
+				return typeof ret === "string" ? 
+					// handle most common string cases
+					ret.replace(rreturn, "") : 
+					// handle cases where value is null/undef or number
+					ret == null ? "" : ret;
 			}
 
 			return undefined;
@@ -4141,20 +4219,23 @@ jQuery.extend({
 			notxml = nType !== 1 || !jQuery.isXMLDoc( elem );
 
 		// Normalize the name if needed
-		name = notxml && jQuery.attrFix[ name ] || name;
+		if ( notxml ) {
+			name = jQuery.attrFix[ name ] || name;
 
-		hooks = jQuery.attrHooks[ name ];
+			hooks = jQuery.attrHooks[ name ];
 
-		if ( !hooks ) {
-			// Use boolHook for boolean attributes
-			if ( rboolean.test( name ) &&
-				(typeof value === "boolean" || value === undefined || value.toLowerCase() === name.toLowerCase()) ) {
+			if ( !hooks ) {
+				// Use boolHook for boolean attributes
+				if ( rboolean.test( name ) ) {
 
-				hooks = boolHook;
+					hooks = boolHook;
 
-			// Use formHook for forms and if the name contains certain characters
-			} else if ( formHook && (jQuery.nodeName( elem, "form" ) || rinvalidChar.test( name )) ) {
-				hooks = formHook;
+				// Use formHook for forms and if the name contains certain characters
+				} else if ( formHook && name !== "className" &&
+					(jQuery.nodeName( elem, "form" ) || rinvalidChar.test( name )) ) {
+
+					hooks = formHook;
+				}
 			}
 		}
 
@@ -4172,8 +4253,8 @@ jQuery.extend({
 				return value;
 			}
 
-		} else if ( hooks && "get" in hooks && notxml ) {
-			return hooks.get( elem, name );
+		} else if ( hooks && "get" in hooks && notxml && (ret = hooks.get( elem, name )) !== null ) {
+			return ret;
 
 		} else {
 
@@ -4237,6 +4318,25 @@ jQuery.extend({
 						0 :
 						undefined;
 			}
+		},
+		// Use the value property for back compat
+		// Use the formHook for button elements in IE6/7 (#1954)
+		value: {
+			get: function( elem, name ) {
+				if ( formHook && jQuery.nodeName( elem, "button" ) ) {
+					return formHook.get( elem, name );
+				}
+				return name in elem ?
+					elem.value :
+					null;
+			},
+			set: function( elem, value, name ) {
+				if ( formHook && jQuery.nodeName( elem, "button" ) ) {
+					return formHook.set( elem, value, name );
+				}
+				// Does not return so that setAttribute is also used
+				elem.value = value;
+			}
 		}
 	},
 
@@ -4266,10 +4366,11 @@ jQuery.extend({
 		var ret, hooks,
 			notxml = nType !== 1 || !jQuery.isXMLDoc( elem );
 
-		// Try to normalize/fix the name
-		name = notxml && jQuery.propFix[ name ] || name;
-		
-		hooks = jQuery.propHooks[ name ];
+		if ( notxml ) {
+			// Fix name and attach hooks
+			name = jQuery.propFix[ name ] || name;
+			hooks = jQuery.propHooks[ name ];
+		}
 
 		if ( value !== undefined ) {
 			if ( hooks && "set" in hooks && (ret = hooks.set( elem, value, name )) !== undefined ) {
@@ -4296,7 +4397,7 @@ jQuery.extend({
 boolHook = {
 	get: function( elem, name ) {
 		// Align boolean attributes with corresponding properties
-		return elem[ jQuery.propFix[ name ] || name ] ?
+		return jQuery.prop( elem, name ) ?
 			name.toLowerCase() :
 			undefined;
 	},
@@ -4311,30 +4412,12 @@ boolHook = {
 			propName = jQuery.propFix[ name ] || name;
 			if ( propName in elem ) {
 				// Only set the IDL specifically if it already exists on the element
-				elem[ propName ] = value;
+				elem[ propName ] = true;
 			}
 
 			elem.setAttribute( name, name.toLowerCase() );
 		}
 		return name;
-	}
-};
-
-// Use the value property for back compat
-// Use the formHook for button elements in IE6/7 (#1954)
-jQuery.attrHooks.value = {
-	get: function( elem, name ) {
-		if ( formHook && jQuery.nodeName( elem, "button" ) ) {
-			return formHook.get( elem, name );
-		}
-		return elem.value;
-	},
-	set: function( elem, value, name ) {
-		if ( formHook && jQuery.nodeName( elem, "button" ) ) {
-			return formHook.set( elem, value, name );
-		}
-		// Does not return so that setAttribute is also used
-		elem.value = value;
 	}
 };
 
@@ -4345,7 +4428,7 @@ if ( !jQuery.support.getSetAttribute ) {
 	jQuery.attrFix = jQuery.propFix;
 	
 	// Use this for any attribute on a form in IE6/7
-	formHook = jQuery.attrHooks.name = jQuery.valHooks.button = {
+	formHook = jQuery.attrHooks.name = jQuery.attrHooks.title = jQuery.valHooks.button = {
 		get: function( elem, name ) {
 			var ret;
 			ret = elem.getAttributeNode( name );
@@ -4448,8 +4531,7 @@ jQuery.each([ "radio", "checkbox" ], function() {
 
 
 
-var hasOwn = Object.prototype.hasOwnProperty,
-	rnamespaces = /\.(.*)$/,
+var rnamespaces = /\.(.*)$/,
 	rformElems = /^(?:textarea|input|select)$/i,
 	rperiod = /\./g,
 	rspaces = / /g,
@@ -4793,7 +4875,7 @@ jQuery.event = {
 		event.target = elem;
 
 		// Clone any incoming data and prepend the event, creating the handler arg list
-		data = data ? jQuery.makeArray( data ) : [];
+		data = data != null ? jQuery.makeArray( data ) : [];
 		data.unshift( event );
 
 		var cur = elem,
@@ -5099,34 +5181,27 @@ jQuery.Event.prototype = {
 // Checks if an event happened on an element within another element
 // Used in jQuery.event.special.mouseenter and mouseleave handlers
 var withinElement = function( event ) {
-	// Check if mouse(over|out) are still within the same parent element
-	var parent = event.relatedTarget;
 
-	// set the correct event type
+	// Check if mouse(over|out) are still within the same parent element
+	var related = event.relatedTarget,
+		inside = false,
+		eventType = event.type;
+
 	event.type = event.data;
 
-	// Firefox sometimes assigns relatedTarget a XUL element
-	// which we cannot access the parentNode property of
-	try {
+	if ( related !== this ) {
 
-		// Chrome does something similar, the parentNode property
-		// can be accessed but is null.
-		if ( parent && parent !== document && !parent.parentNode ) {
-			return;
+		if ( related ) {
+			inside = jQuery.contains( this, related );
 		}
 
-		// Traverse up the tree
-		while ( parent && parent !== this ) {
-			parent = parent.parentNode;
-		}
+		if ( !inside ) {
 
-		if ( parent !== this ) {
-			// handle event if we actually just moused on to a non sub-element
 			jQuery.event.handle.apply( this, arguments );
-		}
 
-	// assuming we've left the element since we most likely mousedover a xul element
-	} catch(e) { }
+			event.type = eventType;
+		}
+	}
 },
 
 // In case of event delegation, we only need to rename the event.type,
@@ -7845,8 +7920,21 @@ function cloneFixAttributes( src, dest ) {
 }
 
 jQuery.buildFragment = function( args, nodes, scripts ) {
-	var fragment, cacheable, cacheresults,
-		doc = (nodes && nodes[0] ? nodes[0].ownerDocument || nodes[0] : document);
+	var fragment, cacheable, cacheresults, doc;
+
+  // nodes may contain either an explicit document object,
+  // a jQuery collection or context object.
+  // If nodes[0] contains a valid object to assign to doc
+  if ( nodes && nodes[0] ) {
+    doc = nodes[0].ownerDocument || nodes[0];
+  }
+
+  // Ensure that an attr object doesn't incorrectly stand in as a document object
+	// Chrome and Firefox seem to allow this to occur and will throw exception
+	// Fixes #8950
+	if ( !doc.createDocumentFragment ) {
+		doc = document;
+	}
 
 	// Only cache "small" (1/2 KB) HTML strings that are associated with the main document
 	// Cloning options loses the selected state, so don't cache them
@@ -7927,7 +8015,7 @@ function fixDefaultChecked( elem ) {
 function findInputs( elem ) {
 	if ( jQuery.nodeName( elem, "input" ) ) {
 		fixDefaultChecked( elem );
-	} else if ( elem.getElementsByTagName ) {
+	} else if ( "getElementsByTagName" in elem ) {
 		jQuery.grep( elem.getElementsByTagName("input"), fixDefaultChecked );
 	}
 }
@@ -7975,6 +8063,8 @@ jQuery.extend({
 				}
 			}
 		}
+
+		srcElements = destElements = null;
 
 		// Return the cloned set
 		return clone;
@@ -8156,10 +8246,8 @@ function evalScript( i, elem ) {
 
 
 
-
 var ralpha = /alpha\([^)]*\)/i,
 	ropacity = /opacity=([^)]*)/,
-	rdashAlpha = /-([a-z])/ig,
 	// fixed for IE9, see #8346
 	rupper = /([A-Z]|^ms)/g,
 	rnumpx = /^-?\d+(?:px)?$/i,
@@ -8173,11 +8261,7 @@ var ralpha = /alpha\([^)]*\)/i,
 	curCSS,
 
 	getComputedStyle,
-	currentStyle,
-
-	fcamelCase = function( all, letter ) {
-		return letter.toUpperCase();
-	};
+	currentStyle;
 
 jQuery.fn.css = function( name, value ) {
 	// Setting 'undefined' is a no-op
@@ -8212,13 +8296,14 @@ jQuery.extend({
 
 	// Exclude the following css properties to add px
 	cssNumber: {
-		"zIndex": true,
+		"fillOpacity": true,
 		"fontWeight": true,
-		"opacity": true,
-		"zoom": true,
 		"lineHeight": true,
+		"opacity": true,
+		"orphans": true,
 		"widows": true,
-		"orphans": true
+		"zIndex": true,
+		"zoom": true
 	},
 
 	// Add in properties whose names you wish to fix before
@@ -8253,6 +8338,8 @@ jQuery.extend({
 			// convert relative number strings (+= or -=) to relative numbers. #7345
 			if ( type === "string" && rrelNum.test( value ) ) {
 				value = +value.replace( rrelNumFilter, "" ) + parseFloat( jQuery.css( elem, name ) );
+				// Fixes bug #9237
+				type = "number";
 			}
 
 			// If a number was passed in, add 'px' to the (except for certain CSS properties)
@@ -8319,10 +8406,6 @@ jQuery.extend({
 		for ( name in options ) {
 			elem.style[ name ] = old[ name ];
 		}
-	},
-
-	camelCase: function( string ) {
-		return string.replace( rdashAlpha, fcamelCase );
 	}
 });
 
@@ -8336,44 +8419,21 @@ jQuery.each(["height", "width"], function( i, name ) {
 
 			if ( computed ) {
 				if ( elem.offsetWidth !== 0 ) {
-					val = getWH( elem, name, extra );
-
+					return getWH( elem, name, extra );
 				} else {
 					jQuery.swap( elem, cssShow, function() {
 						val = getWH( elem, name, extra );
 					});
 				}
 
-				if ( val <= 0 ) {
-					val = curCSS( elem, name, name );
-
-					if ( val === "0px" && currentStyle ) {
-						val = currentStyle( elem, name, name );
-					}
-
-					if ( val != null ) {
-						// Should return "auto" instead of 0, use 0 for
-						// temporary backwards-compat
-						return val === "" || val === "auto" ? "0px" : val;
-					}
-				}
-
-				if ( val < 0 || val == null ) {
-					val = elem.style[ name ];
-
-					// Should return "auto" instead of 0, use 0 for
-					// temporary backwards-compat
-					return val === "" || val === "auto" ? "0px" : val;
-				}
-
-				return typeof val === "string" ? val : val + "px";
+				return val;
 			}
 		},
 
 		set: function( elem, value ) {
 			if ( rnumpx.test( value ) ) {
 				// ignore negative width and height values #1599
-				value = parseFloat(value);
+				value = parseFloat( value );
 
 				if ( value >= 0 ) {
 					return value + "px";
@@ -8496,27 +8556,50 @@ if ( document.documentElement.currentStyle ) {
 curCSS = getComputedStyle || currentStyle;
 
 function getWH( elem, name, extra ) {
-	var which = name === "width" ? cssWidth : cssHeight,
-		val = name === "width" ? elem.offsetWidth : elem.offsetHeight;
 
-	if ( extra === "border" ) {
-		return val;
+	// Start with offset property
+	var val = name === "width" ? elem.offsetWidth : elem.offsetHeight,
+		which = name === "width" ? cssWidth : cssHeight;
+
+	if ( val > 0 ) {
+		if ( extra !== "border" ) {
+			jQuery.each( which, function() {
+				if ( !extra ) {
+					val -= parseFloat( jQuery.css( elem, "padding" + this ) ) || 0;
+				}
+				if ( extra === "margin" ) {
+					val += parseFloat( jQuery.css( elem, extra + this ) ) || 0;
+				} else {
+					val -= parseFloat( jQuery.css( elem, "border" + this + "Width" ) ) || 0;
+				}
+			});
+		}
+
+		return val + "px";
 	}
 
-	jQuery.each( which, function() {
-		if ( !extra ) {
-			val -= parseFloat(jQuery.css( elem, "padding" + this )) || 0;
-		}
+	// Fall back to computed then uncomputed css if necessary
+	val = curCSS( elem, name, name );
+	if ( val < 0 || val == null ) {
+		val = elem.style[ name ] || 0;
+	}
+	// Normalize "", auto, and prepare for extra
+	val = parseFloat( val ) || 0;
 
-		if ( extra === "margin" ) {
-			val += parseFloat(jQuery.css( elem, "margin" + this )) || 0;
+	// Add padding, border, margin
+	if ( extra ) {
+		jQuery.each( which, function() {
+			val += parseFloat( jQuery.css( elem, "padding" + this ) ) || 0;
+			if ( extra !== "padding" ) {
+				val += parseFloat( jQuery.css( elem, "border" + this + "Width" ) ) || 0;
+			}
+			if ( extra === "margin" ) {
+				val += parseFloat( jQuery.css( elem, extra + this ) ) || 0;
+			}
+		});
+	}
 
-		} else {
-			val -= parseFloat(jQuery.css( elem, "border" + this + "Width" )) || 0;
-		}
-	});
-
-	return val;
+	return val + "px";
 }
 
 if ( jQuery.expr && jQuery.expr.filters ) {
@@ -9912,8 +9995,8 @@ var elemdisplay = {},
 	],
 	fxNow,
 	requestAnimationFrame = window.webkitRequestAnimationFrame ||
-	    window.mozRequestAnimationFrame ||
-	    window.oRequestAnimationFrame;
+		window.mozRequestAnimationFrame ||
+		window.oRequestAnimationFrame;
 
 jQuery.fn.extend({
 	show: function( speed, easing, callback ) {
@@ -10227,14 +10310,14 @@ jQuery.extend({
 		// Queueing
 		opt.old = opt.complete;
 		opt.complete = function( noUnmark ) {
+			if ( jQuery.isFunction( opt.old ) ) {
+				opt.old.call( this );
+			}
+
 			if ( opt.queue !== false ) {
 				jQuery.dequeue( this );
 			} else if ( noUnmark !== false ) {
 				jQuery._unmark( this );
-			}
-
-			if ( jQuery.isFunction( opt.old ) ) {
-				opt.old.call( this );
 			}
 		};
 
@@ -10308,7 +10391,7 @@ jQuery.fx.prototype = {
 		if ( t() && jQuery.timers.push(t) && !timerId ) {
 			// Use requestAnimationFrame instead of setInterval if available
 			if ( requestAnimationFrame ) {
-				timerId = 1;
+				timerId = true;
 				raf = function() {
 					// When timerId gets set to null at any point, this stops
 					if ( timerId ) {
@@ -10471,7 +10554,8 @@ function defaultDisplay( nodeName ) {
 
 	if ( !elemdisplay[ nodeName ] ) {
 
-		var elem = jQuery( "<" + nodeName + ">" ).appendTo( "body" ),
+		var body = document.body,
+			elem = jQuery( "<" + nodeName + ">" ).appendTo( body ),
 			display = elem.css( "display" );
 
 		elem.remove();
@@ -10485,14 +10569,15 @@ function defaultDisplay( nodeName ) {
 				iframe.frameBorder = iframe.width = iframe.height = 0;
 			}
 
-			document.body.appendChild( iframe );
+			body.appendChild( iframe );
 
 			// Create a cacheable copy of the iframe document on first call.
-			// IE and Opera will allow us to reuse the iframeDoc without re-writing the fake html
-			// document to it, Webkit & Firefox won't allow reusing the iframe document
+			// IE and Opera will allow us to reuse the iframeDoc without re-writing the fake HTML
+			// document to it; WebKit & Firefox won't allow reusing the iframe document.
 			if ( !iframeDoc || !iframe.createElement ) {
 				iframeDoc = ( iframe.contentWindow || iframe.contentDocument ).document;
-				iframeDoc.write( "<!doctype><html><body></body></html>" );
+				iframeDoc.write( ( document.compatMode === "CSS1Compat" ? "<!doctype html>" : "" ) + "<html><body>" );
+				iframeDoc.close();
 			}
 
 			elem = iframeDoc.createElement( nodeName );
@@ -10501,7 +10586,7 @@ function defaultDisplay( nodeName ) {
 
 			display = jQuery.css( elem, "display" );
 
-			document.body.removeChild( iframe );
+			body.removeChild( iframe );
 		}
 
 		// Store the correct default display
@@ -10822,22 +10907,24 @@ function getWindow( elem ) {
 
 
 
-// Create innerHeight, innerWidth, outerHeight and outerWidth methods
+// Create width, height, innerHeight, innerWidth, outerHeight and outerWidth methods
 jQuery.each([ "Height", "Width" ], function( i, name ) {
 
 	var type = name.toLowerCase();
 
 	// innerHeight and innerWidth
-	jQuery.fn["inner" + name] = function() {
-		return this[0] ?
-			parseFloat( jQuery.css( this[0], type, "padding" ) ) :
+	jQuery.fn[ "inner" + name ] = function() {
+		var elem = this[0];
+		return elem && elem.style ?
+			parseFloat( jQuery.css( elem, type, "padding" ) ) :
 			null;
 	};
 
 	// outerHeight and outerWidth
-	jQuery.fn["outer" + name] = function( margin ) {
-		return this[0] ?
-			parseFloat( jQuery.css( this[0], type, margin ? "margin" : "border" ) ) :
+	jQuery.fn[ "outer" + name ] = function( margin ) {
+		var elem = this[0];
+		return elem && elem.style ?
+			parseFloat( jQuery.css( elem, type, margin ? "margin" : "border" ) ) :
 			null;
 	};
 
@@ -10887,6 +10974,7 @@ jQuery.each([ "Height", "Width" ], function( i, name ) {
 });
 
 
+// Expose jQuery to the global object
 window.jQuery = window.$ = jQuery;
 })(window);
 

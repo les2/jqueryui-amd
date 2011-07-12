@@ -12,13 +12,14 @@
  */
 
 /*jslint strict: false, evil: true */
-/*global readFile: true, process: false, Packages: false, require: true
-  print: false, console: false, java: false */
+/*global readFile: true, process: false, Packages: false, print: false,
+console: false, java: false */
 
-var require, define;
+var requirejs, require, define;
 (function (console, args, readFileFunc) {
 
-    var fileName, env, fs, vm, path, exec, rhinoContext, dir, nodeRequire, exists,
+    var fileName, env, fs, vm, path, exec, rhinoContext, dir, nodeRequire,
+        nodeDefine, exists,
         version = '0.24.0+',
         jsSuffixRegExp = /\.js$/,
         //Indicates so build/build.js that the modules for the optimizer
@@ -72,14 +73,20 @@ var require, define;
         vm = require('vm');
         path = require('path');
         nodeRequire = require;
+        nodeDefine = define;
+
+        //Temporarily hide require and define to allow require.js to define
+        //them.
         require = undefined;
+        define = undefined;
 
         readFile = function (path) {
             return fs.readFileSync(path, 'utf8');
         };
 
         exec = function (string, name) {
-            return vm.runInThisContext(string, name);
+            return vm.runInThisContext(this.requirejsVars.require.makeNodeWrapper(string),
+                                       name ? fs.realpathSync(name) : '');
         };
 
         exists = function (fileName) {
@@ -96,7 +103,7 @@ var require, define;
     }
 
     /** vim: et:ts=4:sw=4:sts=4
- * @license RequireJS 0.24.0+ Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
+ * @license RequireJS 0.25.0 Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
  * Available via the MIT or new BSD license.
  * see: http://github.com/jrburke/requirejs for details
  */
@@ -108,7 +115,7 @@ var require, define;
 
 (function () {
     //Change this version number for each release.
-    var version = "0.24.0+",
+    var version = "0.25.0",
         commentRegExp = /(\/\*([\s\S]*?)\*\/|\/\/(.*)$)/mg,
         cjsRequireRegExp = /require\(["']([^'"\s]+)["']\)/g,
         currDirRegExp = /^\.\//,
@@ -168,10 +175,16 @@ var require, define;
      * Constructs an error with a pointer to an URL with more information.
      * @param {String} id the error ID that maps to an ID on a web page.
      * @param {String} message human readable error.
+     * @param {Error} [err] the original error, if there is one.
+     *
      * @returns {Error}
      */
-    function makeError(id, msg) {
-        return new Error(msg + '\nhttp://requirejs.org/docs/errors.html#' + id);
+    function makeError(id, msg, err) {
+        var e = new Error(msg + '\nhttp://requirejs.org/docs/errors.html#' + id);
+        if (err) {
+            e.originalError = err;
+        }
+        return e;
     }
 
     /**
@@ -226,16 +239,27 @@ var require, define;
         }
     }
 
-    //Check for an existing version of require. If so, then exit out. Only allow
-    //one version of require to be active in a page. However, allow for a require
-    //config object, just exit quickly if require is an actual function.
-    if (typeof require !== "undefined") {
-        if (isFunction(require)) {
+    if (typeof define !== "undefined") {
+        //If a define is already in play via another AMD loader,
+        //do not overwrite.
+        return;
+    }
+
+    if (typeof requirejs !== "undefined") {
+        if (isFunction(requirejs)) {
+            //Do not overwrite and existing requirejs instance.
             return;
         } else {
-            //assume it is a config object.
-            cfg = require;
+            cfg = requirejs;
+            requirejs = undefined;
         }
+    }
+
+    //Allow for a require config object
+    if (typeof require !== "undefined" && !isFunction(require)) {
+        //assume it is a config object.
+        cfg = require;
+        require = undefined;
     }
 
     /**
@@ -490,7 +514,8 @@ var require, define;
             mixin(modRequire, {
                 nameToUrl: makeContextModuleFunc(context.nameToUrl, relModuleMap),
                 toUrl: makeContextModuleFunc(context.toUrl, relModuleMap),
-                isDefined: makeContextModuleFunc(context.isDefined, relModuleMap),
+                defined: makeContextModuleFunc(context.requireDefined, relModuleMap),
+                specified: makeContextModuleFunc(context.requireSpecified, relModuleMap),
                 ready: req.ready,
                 isBrowser: req.isBrowser
             });
@@ -605,7 +630,7 @@ var require, define;
         }
 
         function execManager(manager) {
-            var i, ret, waitingCallbacks,
+            var i, ret, waitingCallbacks, err,
                 cb = manager.callback,
                 fullName = manager.fullName,
                 args = [],
@@ -621,24 +646,20 @@ var require, define;
                     }
                 }
 
-                ret = req.execCb(fullName, manager.callback, args, defined[fullName]);
+                try {
+                    ret = req.execCb(fullName, manager.callback, args, defined[fullName]);
+                } catch (e) {
+                    err = e;
+                }
 
                 if (fullName) {
-                    //If exports is in play, favor that since it helps circular
-                    //dependencies. If setting exports via "module" is in play,
-                    //favor that but only if the value is different from default
-                    //exports value.
-                    if (manager.usingExports && manager.cjsModule &&
-                        manager.cjsModule.exports !== defined[fullName]) {
+                    //If setting exports via "module" is in play,
+                    //favor that over return value and exports. After that,
+                    //favor a non-undefined return value over exports use.
+                    if (manager.cjsModule && manager.cjsModule.exports !== undefined) {
                         ret = defined[fullName] = manager.cjsModule.exports;
-                    } else if (fullName in defined) {
-                        //This case is when usingExports is in play and
-                        //module.exports/setExports was not used. It could also
-                        //occur if the module was previously defined, but that
-                        //should not happen, checks for specified and defined
-                        //elsewhere should prevent that from happening. However,
-                        //if it does for some reason, only the original definition
-                        //will be used for integrity.
+                    } else if (ret === undefined && manager.usingExports) {
+                        //exports already set the defined value.
                         ret = defined[fullName];
                     } else {
                         //Use the return value from the function.
@@ -651,6 +672,31 @@ var require, define;
                 ret = defined[fullName] = cb;
             }
 
+            //Clean up waiting. Do this before error calls, and before
+            //calling back waitingCallbacks, so that bookkeeping is correct
+            //in the event of an error and error is reported in correct order,
+            //since the waitingCallbacks will likely have errors if the
+            //onError function does not throw.
+            if (waiting[manager.waitId]) {
+                delete waiting[manager.waitId];
+                manager.isDone = true;
+                context.waitCount -= 1;
+                if (context.waitCount === 0) {
+                    //Clear the wait array used for cycles.
+                    waitAry = [];
+                }
+            }
+
+            if (err) {
+                err = makeError('defineerror', 'Error evaluating ' +
+                                'module "' + fullName + '" at location "' +
+                                (fullName ? makeModuleMap(fullName).url : '') + '":\n' +
+                                err + '\nfileName:' + (err.fileName || err.sourceURL) +
+                                '\nlineNumber: ' + (err.lineNumber || err.line), err);
+                err.moduleName = fullName;
+                return req.onError(err);
+            }
+
             if (fullName) {
                 //If anything was waiting for this module to be defined,
                 //notify them now.
@@ -660,17 +706,6 @@ var require, define;
                         waitingCallbacks[i].onDep(fullName, ret);
                     }
                     delete managerCallbacks[fullName];
-                }
-            }
-
-            //Clean up waiting.
-            if (waiting[manager.waitId]) {
-                delete waiting[manager.waitId];
-                manager.isDone = true;
-                context.waitCount -= 1;
-                if (context.waitCount === 0) {
-                    //Clear the wait array used for cycles.
-                    waitAry = [];
                 }
             }
 
@@ -792,14 +827,14 @@ var require, define;
         }
 
         /**
-         * Convenience method to call main for a require.def call that was put on
+         * Convenience method to call main for a define call that was put on
          * hold in the defQueue.
          */
         function callDefMain(args) {
             main.apply(null, args);
             //Mark the module loaded. Must do it here in addition
-            //to doing it in require.def in case a script does
-            //not call require.def
+            //to doing it in define in case a script does
+            //not call define
             loaded[args[0]] = true;
         }
 
@@ -886,7 +921,7 @@ var require, define;
                 //It is possible to disable the wait interval by using waitSeconds of 0.
                 expired = waitInterval && (context.startTime + waitInterval) < new Date().getTime(),
                 noLoads = "", hasLoadedProp = false, stillLoading = false, prop,
-                err, manager, ary, i, j, dep, args = [];
+                err, manager;
 
             //If there are items still in the paused queue processing wait.
             //This is particularly important in the sync case where each paused
@@ -961,27 +996,17 @@ var require, define;
                     forceExec(manager, {});
                 }
 
-                //Only allow this recursion to a certain depth.
-                if (checkLoadedDepth < 10) {
+                //Only allow this recursion to a certain depth. Only
+                //triggered by errors in calling a module in which its
+                //modules waiting on it cannot finish loading, or some circular
+                //dependencies that then may add more dependencies.
+                //The value of 5 is a bit arbitrary. Hopefully just one extra
+                //pass, or two for the case of circular dependencies generating
+                //more work that gets resolved in the sync node case.
+                if (checkLoadedDepth < 5) {
                     checkLoadedDepth += 1;
                     checkLoaded();
-                } else {
-                    for (i = 0; (manager = waitAry[i]); i++) {
-                        if (!manager.isDone) {
-                            err += '\n* ' + manager.fullName + ' waiting for: ';
-                            ary = manager.depArray;
-                            for (j = 0; j < ary.length; j++) {
-                                dep = ary[i];
-                                if (!(dep in manager.deps)) {
-                                    args.push(dep);
-                                }
-                            }
-                            err += args.join(',');
-                        }
-                    }
-                    req.onError(makeError('waitdep', 'Unresolved dependency:' + err));
                 }
-                return undefined;
             }
 
             checkLoadedDepth = 0;
@@ -1013,8 +1038,8 @@ var require, define;
 
             load = function (ret) {
                 //Allow the build process to register plugin-loaded dependencies.
-                if (require.onPluginLoad) {
-                    require.onPluginLoad(context, pluginName, name, ret);
+                if (req.onPluginLoad) {
+                    req.onPluginLoad(context, pluginName, name, ret);
                 }
 
                 execManager({
@@ -1043,7 +1068,9 @@ var require, define;
                 if (hasInteractive) {
                     useInteractive = false;
                 }
-                eval(text);
+
+                req.exec(text);
+
                 if (hasInteractive) {
                     useInteractive = true;
                 }
@@ -1290,8 +1317,12 @@ var require, define;
                 }
             },
 
-            isDefined: function (moduleName, relModuleMap) {
+            requireDefined: function (moduleName, relModuleMap) {
                 return makeModuleMap(moduleName, relModuleMap).fullName in defined;
+            },
+
+            requireSpecified: function (moduleName, relModuleMap) {
+                return makeModuleMap(moduleName, relModuleMap).fullName in specified;
             },
 
             require: function (deps, callback, relModuleMap) {
@@ -1373,11 +1404,11 @@ var require, define;
                         args[0] = moduleName;
                         break;
                     } else if (args[0] === moduleName) {
-                        //Found matching require.def call for this script!
+                        //Found matching define call for this script!
                         break;
                     } else {
-                        //Some other named require.def call, most likely the result
-                        //of a build layer that included many require.def calls.
+                        //Some other named define call, most likely the result
+                        //of a build layer that included many define calls.
                         callDefMain(args);
                         args = null;
                     }
@@ -1395,7 +1426,7 @@ var require, define;
                 }
 
                 //Mark the script as loaded. Note that this can be different from a
-                //moduleName that maps to a require.def call. This line is important
+                //moduleName that maps to a define call. This line is important
                 //for traditional browser scripts.
                 loaded[moduleName] = true;
 
@@ -1515,7 +1546,7 @@ var require, define;
      * on a require that are not standardized), and to give a short
      * name for minification/local scope use.
      */
-    req = require = function (deps, callback) {
+    req = requirejs = function (deps, callback) {
 
         //Find the right context, use default
         var contextName = defContextName,
@@ -1547,6 +1578,13 @@ var require, define;
 
         return context.require(deps, callback);
     };
+
+    /**
+     * Export require as a global, but only if it does not already exist.
+     */
+    if (typeof require === "undefined") {
+        require = req;
+    }
 
     /**
      * Global require.toUrl(), to match global require, mostly useful
@@ -1601,8 +1639,8 @@ var require, define;
      * @param {Object} url the URL to the module.
      */
     req.load = function (context, moduleName, url) {
-        var contextName = context.contextName,
-            loaded = context.loaded;
+        var loaded = context.loaded;
+
         isDone = false;
 
         //Only set loaded to false for tracking if it has not already been set.
@@ -1611,7 +1649,7 @@ var require, define;
         }
 
         context.scriptCount += 1;
-        req.attach(url, contextName, moduleName);
+        req.attach(url, context, moduleName);
 
         //If tracking a jQuery, then make sure its ready callbacks
         //are put on hold to prevent its ready callbacks from
@@ -1716,6 +1754,15 @@ var require, define;
     };
 
     /**
+     * Executes the text. Normally just uses eval, but can be modified
+     * to use a more environment specific call.
+     * @param {String} text the text to execute/evaluate.
+     */
+    req.exec = function (text) {
+        return eval(text);
+    };
+
+    /**
      * Executes a module callack function. Broken out as a separate function
      * solely to allow the build system to sequence the files in the built
      * layer in the right sequence.
@@ -1771,17 +1818,19 @@ var require, define;
      * environment. Right now only supports browser loading,
      * but can be redefined in other environments to do the right thing.
      * @param {String} url the url of the script to attach.
-     * @param {String} contextName the name of the context that wants the script.
+     * @param {Object} context the context that wants the script.
      * @param {moduleName} the name of the module that is associated with the script.
      * @param {Function} [callback] optional callback, defaults to require.onScriptLoad
      * @param {String} [type] optional type, defaults to text/javascript
      */
-    req.attach = function (url, contextName, moduleName, callback, type) {
-        var node, loaded, context;
+    req.attach = function (url, context, moduleName, callback, type) {
+        var node, loaded;
         if (isBrowser) {
             //In the browser so use a script tag
             callback = callback || req.onScriptLoad;
-            node = document.createElement("script");
+            node = context && context.config && context.config.xhtml ?
+                    document.createElementNS("http://www.w3.org/1999/xhtml", "html:script") :
+                    document.createElement("script");
             node.type = type || "text/javascript";
             node.charset = "utf-8";
             //Use async so Gecko does not block on executing the script if something
@@ -1796,7 +1845,9 @@ var require, define;
             //plugin
             node.async = !s.skipAsync[url];
 
-            node.setAttribute("data-requirecontext", contextName);
+            if (context) {
+                node.setAttribute("data-requirecontext", context.contextName);
+            }
             node.setAttribute("data-requiremodule", moduleName);
 
             //Set up load listener. Test attachEvent first because IE9 has
@@ -1810,9 +1861,9 @@ var require, define;
             if (node.attachEvent && !isOpera) {
                 //Probably IE. IE (at least 6-8) do not fire
                 //script onload right after executing the script, so
-                //we cannot tie the anonymous require.def call to a name.
+                //we cannot tie the anonymous define call to a name.
                 //However, IE reports the script as being in "interactive"
-                //readyState at the time of the require.def call.
+                //readyState at the time of the define call.
                 useInteractive = true;
                 node.attachEvent("onreadystatechange", callback);
             } else {
@@ -1821,7 +1872,7 @@ var require, define;
             node.src = url;
 
             //For some cache cases in IE 6-8, the script executes before the end
-            //of the appendChild execution, so to tie an anonymous require.def
+            //of the appendChild execution, so to tie an anonymous define
             //call to the module name (which is stored on the node), hold on
             //to a reference to this node, but clear after the DOM insertion.
             currentlyAddingScript = node;
@@ -1839,7 +1890,6 @@ var require, define;
             //are in play, the expectation that a build has been done so that
             //only one script needs to be loaded anyway. This may need to be
             //reevaluated if other use cases become common.
-            context = contexts[contextName];
             loaded = context.loaded;
             loaded[moduleName] = false;
 
@@ -2080,8 +2130,12 @@ var require, define;
 
 }());
     } else if (env === 'node') {
-        this.require = require;
-        this.define = define;
+        this.requirejsVars = {
+            require: require,
+            define: define,
+            nodeRequire: nodeRequire
+        };
+        require.nodeRequire = nodeRequire;
 
         /**
  * @license RequireJS node Copyright (c) 2010-2011, The Dojo Foundation All Rights Reserved.
@@ -2090,7 +2144,7 @@ var require, define;
  */
 
 /*jslint regexp: false, strict: false */
-/*global require: false, define: false, nodeRequire: true, process: false */
+/*global require: false, define: false, requirejsVars: false, process: false */
 
 /**
  * This adapter assumes that x.js has loaded it and set up
@@ -2098,23 +2152,19 @@ var require, define;
  * usage from within the requirejs directory. The general
  * node adapater is r.js.
  */
+
 (function () {
-    var req = nodeRequire,
-        fs = req('fs'),
-        path = req('path'),
-        vm = req('vm');
-
-    //Clear out the global set by x.js
-    nodeRequire = null;
-
-    //Make nodeRequire available off of require, to allow a script to
-    //add things to its require.paths for example.
-    require.nodeRequire = req;
+    var nodeReq = requirejsVars.nodeRequire,
+        req = requirejsVars.require,
+        def = requirejsVars.define,
+        fs = nodeReq('fs'),
+        path = nodeReq('path'),
+        vm = nodeReq('vm');
 
     //Supply an implementation that allows synchronous get of a module.
-    require.get = function (context, moduleName, relModuleMap) {
+    req.get = function (context, moduleName, relModuleMap) {
         if (moduleName === "require" || moduleName === "exports" || moduleName === "module") {
-            require.onError(new Error("Explicit require of " + moduleName + " is not allowed."));
+            req.onError(new Error("Explicit require of " + moduleName + " is not allowed."));
         }
 
         var ret,
@@ -2128,7 +2178,7 @@ var require, define;
         } else {
             if (ret === undefined) {
                 //Try to dynamically fetch it.
-                require.load(context, moduleName, moduleMap.url);
+                req.load(context, moduleName, moduleMap.url);
                 //The above call is sync, so can do the next thing safely.
                 ret = context.defined[moduleName];
             }
@@ -2137,11 +2187,20 @@ var require, define;
         return ret;
     };
 
-    require.load = function (context, moduleName, url) {
-        var contents;
+    //Add wrapper around the code so that it gets the requirejs
+    //API instead of the Node API, and it is done lexically so
+    //that it survives later execution.
+    req.makeNodeWrapper = function (contents) {
+        return '(function (require, define) { ' +
+                contents +
+                '\n}(requirejsVars.require, requirejsVars.define));';
+    };
+
+    req.load = function (context, moduleName, url) {
+        var contents, err;
 
         //isDone is used by require.ready()
-        require.s.isDone = false;
+        req.s.isDone = false;
 
         //Indicate a the module is in process of loading.
         context.loaded[moduleName] = false;
@@ -2149,17 +2208,46 @@ var require, define;
 
         if (path.existsSync(url)) {
             contents = fs.readFileSync(url, 'utf8');
-            vm.runInThisContext(contents, url);
+
+            contents = req.makeNodeWrapper(contents);
+            try {
+                vm.runInThisContext(contents, fs.realpathSync(url));
+            } catch (e) {
+                err = new Error('Evaluating ' + url + ' as module "' +
+                                moduleName + '" failed with error: ' + e);
+                err.originalError = e;
+                err.moduleName = moduleName;
+                err.fileName = url;
+                return req.onError(err);
+            }
         } else {
-            define(moduleName, function () {
-                return req(moduleName);
+            def(moduleName, function () {
+                try {
+                    return nodeReq(moduleName);
+                } catch (e) {
+                    err = new Error('Calling node\'s require("' +
+                                        moduleName + '") failed with error: ' + e);
+                    err.originalError = e;
+                    err.moduleName = moduleName;
+                    return req.onError(err);
+                }
             });
         }
 
         //Support anonymous modules.
         context.completeLoad(moduleName);
+
+        return undefined;
+    };
+
+    //Override to provide the function wrapper for define/require.
+    req.exec = function (text) {
+        /*jslint evil: true */
+        text = req.makeNodeWrapper(text);
+        return eval(text);
     };
 }());
+
     }
 
     //Support a default file name to execute. Useful for hosted envs
@@ -2878,6 +2966,10 @@ define('logger', ['env!env/print'], function (print) {
         ERROR: 3,
         level: 0,
         logPrefix: "",
+
+        logLevel: function( level ) {
+            this.level = level;
+        },
 
         trace: function (message) {
             if (this.level <= this.TRACE) {
@@ -5930,6 +6022,29 @@ define('parse', ['uglifyjs/index'], function (uglify) {
     }
 
     /**
+     * Converts a regular JS array of strings to an AST node that
+     * represents that array.
+     * @param {Array} ary
+     * @param {Node} an AST node that represents an array of strings.
+     */
+    function toAstArray(ary) {
+        var output = [
+            'array',
+            []
+        ],
+        i, item;
+
+        for (i = 0; (item = ary[i]); i++) {
+            output[1].push([
+                'string',
+                item
+            ]);
+        }
+
+        return output;
+    }
+
+    /**
      * Validates a node as being an object literal (like for i18n bundles)
      * or an array literal with just string members. If an array literal,
      * only return array members that are full strings. So the caller of
@@ -6046,25 +6161,34 @@ define('parse', ['uglifyjs/index'], function (uglify) {
      */
     parse.getAnonDeps = function (fileName, fileContents) {
         var astRoot = parser.parse(fileContents),
-            deps = [],
-            defFunc = this.findAnonRequireDefCallback(astRoot),
+            defFunc = this.findAnonRequireDefCallback(astRoot);
+
+        return parse.getAnonDepsFromNode(defFunc);
+    };
+
+    /**
+     * Finds require("") calls inside a CommonJS anonymous module wrapped
+     * in a define function, given an AST node for the definition function.
+     * @param {Node} node the AST node for the definition function.
+     * @returns {Array} and array of dependency names. Can be of zero length.
+     */
+    parse.getAnonDepsFromNode = function (node) {
+        var deps = [],
             funcArgLength;
 
-        //Now look inside the def call's function for require calls.
-        if (defFunc) {
-            this.findRequireDepNames(defFunc, deps);
+        if (node) {
+            this.findRequireDepNames(node, deps);
 
             //If no deps, still add the standard CommonJS require, exports, module,
             //in that order, to the deps, but only if specified as function args.
             //In particular, if exports is used, it is favored over the return
             //value of the function, so only add it if asked.
-            funcArgLength = defFunc[2] && defFunc[2].length;
+            funcArgLength = node[2] && node[2].length;
             if (funcArgLength) {
                 deps = (funcArgLength > 1 ? ["require", "exports", "module"] :
                         ["require"]).concat(deps);
             }
         }
-
         return deps;
     };
 
@@ -6266,7 +6390,7 @@ define('parse', ['uglifyjs/index'], function (uglify) {
      * Otherwise null.
      */
     parse.parseNode = function (node, onMatch) {
-        var call, name, config, deps, args;
+        var call, name, config, deps, args, cjsDeps;
 
         if (!isArray(node)) {
             return null;
@@ -6314,6 +6438,16 @@ define('parse', ['uglifyjs/index'], function (uglify) {
                           name[0] === 'function' || isObjectLiteral(name))) &&
                         (!deps || isArrayLiteral(deps) ||
                          deps[0] === 'function' || isObjectLiteral(deps))) {
+
+                        //If first arg is a function, could be a commonjs wrapper,
+                        //look inside for commonjs dependencies.
+                        if (name && name[0] === 'function') {
+                            cjsDeps = parse.getAnonDepsFromNode(name);
+                            if (cjsDeps.length) {
+                                name = toAstArray(cjsDeps);
+                            }
+                        }
+
                         return onMatch("define", null, name, deps);
                     }
                 }
@@ -7334,6 +7468,10 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
         config = build.createConfig(cmdConfig);
         paths = config.paths;
 
+        if ( config.logLevel ) {
+            logger.logLevel( config.logLevel );
+        }
+
         if (!config.out && !config.cssIn) {
             //This is not just a one-off file build but a full build profile, with
             //lots of files to process.
@@ -7950,7 +8088,7 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
                         fileContents += input;
                     };
                     writeApi.asModule = function (moduleName, input) {
-                        fileContents += build.toTransport(moduleName, path, input, layer);
+                        fileContents += "\n" + build.toTransport(moduleName, path, input, layer);
                     };
                     builder.write(parts.prefix, parts.name, writeApi);
                 }
@@ -7960,7 +8098,7 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
 
                 currContents = build.toTransport(moduleName, path, currContents, layer);
 
-                fileContents += currContents;
+                fileContents += "\n" + currContents;
             }
 
             buildFileContents += path.replace(config.dir, "") + "\n";
@@ -7979,7 +8117,7 @@ function (lang,   logger,   file,          parse,    optimize,   pragma,
                                    'define("jquery", [], function () { return jq; });\n' +
                                    '}());\n';
                 } else {
-                    fileContents += 'define("' + moduleName + '", function(){});\n';
+                    fileContents += '\ndefine("' + moduleName + '", function(){});\n';
                 }
             }
         }
@@ -8079,11 +8217,11 @@ function (args,            build) {
 
 
     } else if (commandOption === 'v') {
-        console.log('r.js: ' + version + ', RequireJS: ' + require.version);
+        console.log('r.js: ' + version + ', RequireJS: ' + this.requirejsVars.require.version);
     } else if (commandOption === 'convert') {
         loadLib();
 
-        require(['env!env/args', 'commonJs', 'env!env/print'],
+        this.requirejsVars.require(['env!env/args', 'commonJs', 'env!env/print'],
         function (args,           commonJs,   print) {
 
             var srcDir, outDir;
@@ -8115,14 +8253,16 @@ function (args,            build) {
         }
 
         if (exists(fileName)) {
-            try {
-                exec(readFile(fileName), fileName);
-            } catch (e) {
-                //The optimizer may have been wanted, ask about it
-                console.log('Trying to run the optimizer? Be sure to pass ' +
-                            'the -o option.\nError evaluating file: ' + fileName +
-                            ': ' + e);
+            if (env === 'node') {
+                //Put the file name's directory on the paths
+                //so node_modules in that directory will be
+                //consulted instead of relying on a node_modules
+                //in the r.js location.
+                //Put the current working direct
+                nodeRequire.paths.unshift(path.join(path.dirname(fs.realpathSync(fileName)), 'node_modules'));
             }
+
+            exec(readFile(fileName), fileName);
         } else {
             showHelp();
         }

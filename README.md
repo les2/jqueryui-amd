@@ -14,20 +14,24 @@ The script requires Node 0.4+. Run the following command to generate the modules
 
 It is assumed a full source directory of jQuery UI is given to the conversion
 script. So, the directory should have a **ui** directory inside of it with the
-.js files for jQuery UI.
+.js files for jQuery UI. The example used code from this URL:
+
+http://jqueryui.com/download/jquery-ui-1.8.14.custom.zip
+
+and inside that zip file, the "development-bundle" directory was used.
 
 The example's jQueryUI directory was created with the following command (run
 from this directory):
 
-    node example/r.js convert.js path/to/jquery-ui-1.8.13 ./example/webapp/scripts/jqueryui-1.8.13
+    node example/r.js convert.js path/to/jquery-ui-1.8.14 ./example/webapp/scripts/jqueryui-1.8.14
 
 Once the conversion script runs, it will create a few new files and directories.
-Taking the example above, the **example/webapp/scripts/jqueryui-1.8.13**
+Taking the example above, the **example/webapp/scripts/jqueryui-1.8.14**
 directory above would have the following contents (items that can be deleted if
 you do not use them -- they are not strictly part of making the example
 work -- are marked with a (d) below):
 
-* jqueryui-1.8.13
+* jqueryui-1.8.14
     * AUTHORS.txt
     * demos (d)
     * docs (d)
@@ -45,11 +49,11 @@ work -- are marked with a (d) below):
 
 The conversion process transformed the following files:
 
-* jqueryui-1.8.13/ui/jquery-ui.js --> jqueryui-1.8.13/jqueryui.js
-* jqueryui-1.8.13/ui/jquery.ui.?.js --> jqueryui-1.8.13/jqueryui/?.js
-* jqueryui-1.8.13/ui/jquery.effects.?.js --> jqueryui-1.8.13/jqueryui/effects/?.js
-* jqueryui-1.8.13/ui/i18n/jquery.ui.datepicker-?.js --> jqueryui-1.8.13/jqueryui/datepicker-?.js
-* jqueryui-1.8.13/ui/i18n/jquery-ui-i18n.js --> jqueryui-1.8.13/jqueryui-i18n.js
+* jqueryui-1.8.14/ui/jquery-ui.js --> jqueryui-1.8.14/jqueryui.js
+* jqueryui-1.8.14/ui/jquery.ui.?.js --> jqueryui-1.8.14/jqueryui/?.js
+* jqueryui-1.8.14/ui/jquery.effects.?.js --> jqueryui-1.8.14/jqueryui/effects/?.js
+* jqueryui-1.8.14/ui/i18n/jquery.ui.datepicker-?.js --> jqueryui-1.8.14/jqueryui/datepicker-?.js
+* jqueryui-1.8.14/ui/i18n/jquery-ui-i18n.js --> jqueryui-1.8.14/jqueryui-i18n.js
 
 These file/path name changes were done to fit better with module path expectations,
 and to make it easier/less typing to load the files.
@@ -62,7 +66,7 @@ Run the webapp/app.html file to see the example in action.
 
 ## Downloads
 
-* [A zip file of the converted 1.8.13 release](http://requirejs.org/jqueryui-amd/jqueryui-amd-1.8.13.zip).
+* [A zip file of the converted 1.8.14 release](http://requirejs.org/jqueryui-amd/jqueryui-amd-1.8.14.zip).
 * [A zip file of this complete directory, including conversion script and example project](http://requirejs.org/jqueryui-amd/jqueryui-amd.zip).
 
 

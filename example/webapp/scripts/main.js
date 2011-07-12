@@ -24,7 +24,7 @@ require({
     //Set config for finding 'jqueryui'. The path is relative
     //to the location of require-jquery.js.
     paths: {
-        jqueryui: 'jqueryui-1.8.13/jqueryui'
+        jqueryui: 'jqueryui-1.8.14/jqueryui'
     }
 }, ['require', 'jquery', 'jqueryui/tabs'], function (req, $) {
 
