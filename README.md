@@ -67,7 +67,7 @@ Run the webapp/app.html file to see the example in action.
 ## Downloads
 
 * [A zip file of the converted 1.8.14 release](http://requirejs.org/jqueryui-amd/jqueryui-amd-1.8.14.zip).
-* [A zip file of this complete directory, including conversion script and example project](http://requirejs.org/jqueryui-amd/jqueryui-amd.zip).
+* [A zip file of this complete directory, including conversion script and example project](https://github.com/jrburke/jqueryui-amd/archives/master).
 
 
 ## Constraints
