@@ -1,46 +1,42 @@
 # jqueryui-amd
 
 A conversion script for translating [jQuery UI](http://jqueryui.com/) files into
-the style used by the [AMD API proposal](http://wiki.commonjs.org/wiki/Modules/AsynchronousDefinition).
-This API is usable in script loaders like [RequireJS](http://requirejs.org).
+[AMD](https://github.com/amdjs/amdjs-api/wiki/AMD) JavaScript modules.
 
-## How to Run It
+The modules can be loaded by AMD script loaders like [RequireJS](http://requirejs.org).
 
-The script requires Node 0.4+. Run the following command to generate the modules:
+## Installing
 
-    node example/r.js convert.js path/to/jqueryui/source ./outputdir
+The script requires nodejs 0.6 to run. Use npm to install it:
+
+    npm install -g jqueryui-amd
+
+## Using
+
+    jqueryui-amd path/to/jquery-ui-version
 
 ## What happens
 
 It is assumed a full source directory of jQuery UI is given to the conversion
 script. So, the directory should have a **ui** directory inside of it with the
-.js files for jQuery UI. The example used code from this URL:
+.js files for jQuery UI.
 
-http://jqueryui.com/download/jquery-ui-1.8.14.custom.zip
+The script will a `jqueryui` directory that lives inside the directory given to
+the conversion script. The AMD modules will be inside the `jqueryui` directory.
 
-and inside that zip file, the "development-bundle" directory was used.
-
-The example's jQueryUI directory was created with the following command (run
-from this directory):
-
-    node example/r.js convert.js path/to/jquery-ui-1.8.14 ./example/webapp/scripts/jqueryui-1.8.14
-
-Once the conversion script runs, it will create a few new files and directories.
-Taking the example above, the **example/webapp/scripts/jqueryui-1.8.14**
+Taking the example above, the **path/to/jqueryui-version**
 directory above would have the following contents (items that can be deleted if
 you do not use them -- they are not strictly part of making the example
 work -- are marked with a (d) below):
 
-* jqueryui-1.8.14
+* jqueryui-version
     * AUTHORS.txt
     * demos (d)
     * docs (d)
     * external (d)
     * GPL-LICENSE.txt
     * jquery-1.4.4.js (d)
-    * jqueryui (directory created by convert)
-    * jqueryui.js (file created by convert)
-    * jqueryui-i18n.js (file created by convert)
+    * **jqueryui** (directory created by convert)
     * MIT-LICENSE.txt
     * tests (d)
     * themes
@@ -49,35 +45,49 @@ work -- are marked with a (d) below):
 
 The conversion process transformed the following files:
 
-* jqueryui-1.8.14/ui/jquery-ui.js --> jqueryui-1.8.14/jqueryui.js
 * jqueryui-1.8.14/ui/jquery.ui.?.js --> jqueryui-1.8.14/jqueryui/?.js
 * jqueryui-1.8.14/ui/jquery.effects.?.js --> jqueryui-1.8.14/jqueryui/effects/?.js
 * jqueryui-1.8.14/ui/i18n/jquery.ui.datepicker-?.js --> jqueryui-1.8.14/jqueryui/datepicker-?.js
-* jqueryui-1.8.14/ui/i18n/jquery-ui-i18n.js --> jqueryui-1.8.14/jqueryui-i18n.js
 
 These file/path name changes were done to fit better with module path expectations,
 and to make it easier/less typing to load the files.
+
+## Configuring AMD loading
+
+Once the conversion is done, either configure the location to jqueryui in
+the AMD loaders config. Example for requirejs:
+
+```javascript
+requirejs.config({
+    paths: {
+        jqueryui: 'path/to/jquery-ui-version/jqueryui'
+    }
+});
+```
+
+Or just place the `path/to/jquery-ui-version/jqueryui` directory directly in
+the `baseUrl` for the AMD project.
+
+Then, just reference the modules with a `jqueryui` prefix:
+
+```javascript
+define(['jquery', jqueryui/widget', 'jqueryui/button'], function ($) {
+    //Use widget and button in here, off of the given $ variable.
+});
+```
 
 ## Example
 
 The **example** directory contains an example that includes a sample web
 project, in the **webapp** directory, along with the RequireJS optimizer, r.js.
-Run the webapp/app.html file to see the example in action.
-
-## Downloads
-
-* [A zip file of the converted 1.8.14 release](http://requirejs.org/jqueryui-amd/jqueryui-amd-1.8.14.zip).
-* [A zip file of this complete directory, including conversion script and example project](https://github.com/jrburke/jqueryui-amd/archives/master).
-
+Run the webapp/app.html file to see the example in action.d
 
 ## Constraints
 
-This script assumes a directory for jQuery UI contains a directory inside of
-it that has a jquery-ui.js file.
+This script assumes a directory for jQuery UI contains a `ui` directory.
 
 This script will need to be revisited if:
 
-* the jquery-ui.js name changes.
 * the naming convention of jquery.something.plugin.js changes.
 * the i18n approach changes.
 * more i18n files appear that are not for datepicker.
