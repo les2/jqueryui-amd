@@ -71,7 +71,7 @@ the `baseUrl` for the AMD project.
 Then, just reference the modules with a `jqueryui` prefix:
 
 ```javascript
-define(['jquery', jqueryui/widget', 'jqueryui/button'], function ($) {
+define(['jquery', 'jqueryui/widget', 'jqueryui/button'], function ($) {
     //Use widget and button in here, off of the given $ variable.
 });
 ```
@@ -80,7 +80,7 @@ define(['jquery', jqueryui/widget', 'jqueryui/button'], function ($) {
 
 The **example** directory contains an example that includes a sample web
 project, in the **webapp** directory, along with the RequireJS optimizer, r.js.
-Run the webapp/app.html file to see the example in action.d
+Run the webapp/app.html file to see the example in action.
 
 ## Constraints
 
